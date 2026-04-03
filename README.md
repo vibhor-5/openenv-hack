@@ -24,6 +24,12 @@ ML practitioners spend enormous time on hyperparameter tuning. This environment 
 
 The small dataset subsets (5k–10k samples) make overfitting a **real, tangible problem** the agent must address — exactly like real low-data regimes practitioners face daily.
 
+## Vision & Scalability
+
+The long-term vision for this environment is to **teach AI agents to monitor and optimize the training of large-scale models on distributed systems** — multi-GPU clusters, sharded data pipelines, and fault-tolerant training loops. In production ML, human engineers spend significant time babysitting training runs: watching for loss spikes, adjusting learning rates, restarting from checkpoints, and rebalancing resources across nodes. An agent that masters these skills could dramatically accelerate the development cycle of foundation models.
+
+To fit within current compute constraints (and the OpenEnv specification), the environment currently operates on small models trainable on standard CPUs. However, the core abstractions — observing training curves, adjusting hyperparameters mid-run, detecting convergence/divergence, and deciding when to stop — are **identical to those required at scale**. An agent that learns effective optimization strategies here can transfer those skills to larger, distributed settings as the environment scales up.
+
 ## Tasks
 
 ### Task 1: MNIST Digit Classifier (Easy)
