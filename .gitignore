@@ -58,3 +58,6 @@ data/
 test_env*.py
 *.log
 out.txt
+
+
+.env
