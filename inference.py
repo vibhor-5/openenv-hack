@@ -7,8 +7,7 @@ endpoint and keeps request pacing under a hard RPM ceiling.
 Environment Variables:
     API_BASE_URL           - LLM API endpoint
     MODEL_NAME             - model identifier
-    OPENAI_API_KEY         - API key for auth
-    GEMINI_API_KEY         - Gemini API key (preferred for Gemini endpoint)
+    HF_TOKEN               - API key for auth
     ENV_URL                - environment server URL (default: http://localhost:8000)
     LLM_RPM_LIMIT          - max model requests per minute (default: 5)
     LLM_MAX_RETRIES        - max rate-limit retries per request (default: 3)
@@ -42,12 +41,14 @@ API_BASE_URL = os.environ.get(
     "https://api.openai.com/v1",
 )
 MODEL_NAME = os.environ.get("MODEL_NAME", "gpt-4o-mini")
-OPENAI_API_KEY = (
+
+HF_TOKEN = (
     os.environ.get("HF_TOKEN")
     or os.environ.get("OPENAI_API_KEY")
     or os.environ.get("OPENROUTER_API_KEY")
     or os.environ.get("GEMINI_API_KEY")
 )
+
 ENV_URL = os.environ.get("ENV_URL", "http://localhost:8000")
 
 LLM_RPM_LIMIT = max(1, int(os.environ.get("LLM_RPM_LIMIT", "5")))
@@ -282,7 +283,7 @@ def create_client() -> OpenAI:
         }
 
     return OpenAI(
-        api_key=OPENAI_API_KEY,
+        api_key=HF_TOKEN,
         base_url=API_BASE_URL,
         default_headers=extra_headers,
     )
@@ -857,16 +858,16 @@ def run_task(client: OpenAI, scheduler: RequestScheduler, task_id: str) -> Dict[
 
 def main() -> None:
     """Run the baseline across all tasks."""
-    if not OPENAI_API_KEY:
-        print("ERROR: Set OPENAI_API_KEY, OPENROUTER_API_KEY or GEMINI_API_KEY environment variable")
+    if not HF_TOKEN:
+        print("ERROR: Set HF_TOKEN, OPENAI_API_KEY, OPENROUTER_API_KEY or GEMINI_API_KEY environment variable")
         sys.exit(1)
 
-    print(f"API Base: {API_BASE_URL}")
-    print(f"Model: {MODEL_NAME}")
-    print(f"Environment: {ENV_URL}")
-    print(f"Tasks: {TASKS}")
-    print(f"RPM limit: {LLM_RPM_LIMIT} (min gap {MIN_REQUEST_GAP_SECONDS:.1f}s)")
-    print(f"Retries: {LLM_MAX_RETRIES}")
+    print(f"API Base: {API_BASE_URL}", file=sys.stderr)
+    print(f"Model: {MODEL_NAME}", file=sys.stderr)
+    print(f"Environment: {ENV_URL}", file=sys.stderr)
+    print(f"Tasks: {TASKS}", file=sys.stderr)
+    print(f"RPM limit: {LLM_RPM_LIMIT} (min gap {MIN_REQUEST_GAP_SECONDS:.1f}s)", file=sys.stderr)
+    print(f"Retries: {LLM_MAX_RETRIES}", file=sys.stderr)
 
     client = create_client()
     scheduler = RequestScheduler(
@@ -887,20 +888,21 @@ def main() -> None:
     total_requests = sum(result["requests"] for result in results)
     total_retries = sum(result["retries"] for result in results)
 
-    print(f"\n{'=' * 60}")
-    print("BASELINE RESULTS")
-    print(f"{'=' * 60}")
+    print(f"\n{'=' * 60}", file=sys.stderr)
+    print("BASELINE RESULTS", file=sys.stderr)
+    print(f"{'=' * 60}", file=sys.stderr)
     for result in results:
         print(
             "  "
             f"{result['task_id']:20s} score={result['final_score']} "
             f"decisions={result['llm_decisions']} requests={result['requests']} "
-            f"retries={result['retries']} elapsed={result['elapsed_seconds']}s"
+            f"retries={result['retries']} elapsed={result['elapsed_seconds']}s",
+            file=sys.stderr
         )
-    print(f"  Total requests: {total_requests}")
-    print(f"  Total retries: {total_retries}")
-    print(f"  Total elapsed: {elapsed}s ({elapsed / 60:.1f} min)")
-    print(f"{'=' * 60}")
+    print(f"  Total requests: {total_requests}", file=sys.stderr)
+    print(f"  Total retries: {total_retries}", file=sys.stderr)
+    print(f"  Total elapsed: {elapsed}s ({elapsed / 60:.1f} min)", file=sys.stderr)
+    print(f"{'=' * 60}", file=sys.stderr)
 
     output = {
         "results": results,
@@ -911,7 +913,7 @@ def main() -> None:
         "rpm_limit": LLM_RPM_LIMIT,
         "min_request_gap_seconds": round(MIN_REQUEST_GAP_SECONDS, 1),
     }
-    print(f"\n{json.dumps(output, indent=2, default=str)}")
+    print(f"\n{json.dumps(output, indent=2, default=str)}", file=sys.stderr)
 
 
 if __name__ == "__main__":
