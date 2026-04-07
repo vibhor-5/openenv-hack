@@ -43,7 +43,8 @@ API_BASE_URL = os.environ.get(
 )
 MODEL_NAME = os.environ.get("MODEL_NAME", "gpt-4o-mini")
 OPENAI_API_KEY = (
-    os.environ.get("OPENAI_API_KEY")
+    os.environ.get("HF_TOKEN")
+    or os.environ.get("OPENAI_API_KEY")
     or os.environ.get("OPENROUTER_API_KEY")
     or os.environ.get("GEMINI_API_KEY")
 )
@@ -705,108 +706,143 @@ def run_task(client: OpenAI, scheduler: RequestScheduler, task_id: str) -> Dict[
     task_stats = TaskStats()
     task_started_at = time.time()
 
-    print(f"\n{'=' * 60}")
-    print(f"Task: {task_id}")
-    print(f"{'=' * 60}")
+    print(f"[START] task={task_id} env=ml_training_optimizer model={MODEL_NAME}", flush=True)
 
-    with MLTrainerEnv(base_url=ENV_URL).sync() as env:
-        reset_result = env.reset(task_id=task_id)
-        metadata = merge_task_metadata(task_id, extract_observation_metadata(reset_result.observation))
-        latest_data: Dict[str, Any] = {}
-        action_summaries: List[str] = []
-        total_reward = 0.0
-        final_score = None
+    rewards: List[float] = []
+    total_reward = 0.0
+    final_score = 0.0
+    steps_taken = 0
+    success = False
 
-        print(f"  Task: {metadata.get('task_name', task_id)}")
-        print(f"  Difficulty: {metadata.get('difficulty', '?')}")
-        print(f"  Dataset: {metadata.get('dataset', '?')}")
-        print(f"  Max epochs: {metadata.get('max_epochs', '?')}")
-        print(f"  LLM decision budget: {max_decisions}")
-
-        for decision_index in range(max_decisions):
-            messages = build_messages(
-                metadata=metadata,
-                latest_data=latest_data,
-                action_summaries=action_summaries,
-                decision_index=decision_index,
-                max_decisions=max_decisions,
-            )
-            tool_call = request_action(
-                client=client,
-                scheduler=scheduler,
-                messages=messages,
-                stats=task_stats,
-                decision_index=decision_index,
-                max_decisions=max_decisions,
-            )
-            task_stats.decisions += 1
-
-            tool_name = tool_call["tool_name"]
-            arguments = tool_call["arguments"]
-            print(f"  Decision {decision_index + 1}/{max_decisions}: {tool_name}({json.dumps(arguments, default=str)[:100]})")
-
+    try:
+        env_instance = MLTrainerEnv(base_url=ENV_URL).sync()
+        with env_instance as env:
             try:
-                step_result = env.step(CallToolAction(tool_name=tool_name, arguments=arguments))
-            except Exception as exc:
-                raise InferenceError(f"Environment step failed for {tool_name}: {exc}") from exc
+                reset_result = env.reset(task_id=task_id)
+            except Exception as e:
+                # Need to swallow to trigger finally block properly
+                print(f"[DEBUG] env.reset() failed: {e}", flush=True)
+                raise e
 
-            observation = step_result.observation
-            reward = step_result.reward or 0.0
-            done = step_result.done
-            total_reward += reward
+            metadata = merge_task_metadata(task_id, extract_observation_metadata(reset_result.observation))
+            latest_data: Dict[str, Any] = {}
+            action_summaries: List[str] = []
 
-            result_data = normalize_tool_result(extract_tool_result_from_observation(observation))
-            if result_data:
-                latest_data = apply_tool_context(tool_name, arguments, latest_data, result_data)
-            else:
-                latest_data = apply_tool_context(
-                    tool_name,
-                    arguments,
-                    latest_data,
-                    extract_observation_metadata(observation),
-                )
-            action_summaries.append(action_summary(tool_name, arguments, latest_data, reward))
+            for decision_index in range(max_decisions):
+                try:
+                    messages = build_messages(
+                        metadata=metadata,
+                        latest_data=latest_data,
+                        action_summaries=action_summaries,
+                        decision_index=decision_index,
+                        max_decisions=max_decisions,
+                    )
+                    tool_call = request_action(
+                        client=client,
+                        scheduler=scheduler,
+                        messages=messages,
+                        stats=task_stats,
+                        decision_index=decision_index,
+                        max_decisions=max_decisions,
+                    )
+                except Exception as e:
+                    print(f"[DEBUG] model request failed: {e}", flush=True)
+                    break
+                    
+                task_stats.decisions += 1
+                tool_name = tool_call["tool_name"]
+                arguments = tool_call["arguments"]
+                
+                args_str = json.dumps(arguments, separators=(',', ':'))
+                action_str = f"{tool_name}({args_str})"
+                
+                error = None
+                reward = 0.0
+                done = False
 
-            metadata_grade = extract_observation_metadata(observation).get("grade", {})
-            result_grade = latest_data.get("grade", {}) if isinstance(latest_data, dict) else {}
-            if result_grade:
-                final_score = result_grade.get("score")
-                print(f"    Score: {final_score}")
-            elif metadata_grade:
-                final_score = metadata_grade.get("score")
-                print(f"    Score: {final_score}")
+                try:
+                    step_result = env.step(CallToolAction(tool_name=tool_name, arguments=arguments))
+                    observation = step_result.observation
+                    reward = step_result.reward or 0.0
+                    done = step_result.done
+                    
+                    result_data = normalize_tool_result(extract_tool_result_from_observation(observation))
+                    if result_data:
+                        latest_data = apply_tool_context(tool_name, arguments, latest_data, result_data)
+                    else:
+                        latest_data = apply_tool_context(
+                            tool_name,
+                            arguments,
+                            latest_data,
+                            extract_observation_metadata(observation),
+                        )
+                    
+                    # Update score
+                    metadata_grade = extract_observation_metadata(observation).get("grade", {})
+                    result_grade = latest_data.get("grade", {}) if isinstance(latest_data, dict) else {}
+                    if result_grade:
+                        final_score = result_grade.get("score") or 0.0
+                    elif metadata_grade:
+                        final_score = metadata_grade.get("score") or 0.0
+                        
+                except Exception as exc:
+                    error = str(exc)
+                    done = True
 
-            print(f"    Reward: {reward} | Done: {done}")
-            print(f"    {compact_state_summary(metadata, latest_data)}")
-
-            if done:
-                break
-        else:
-            # LLM exhausted its decision budget without submitting.
-            # Auto-submit so the task still gets a score.
-            print(f"  [Decision budget exhausted — auto-submitting model...]")
-            try:
-                step_result = env.step(CallToolAction(tool_name="submit_model", arguments={}))
-                observation = step_result.observation
-                reward = step_result.reward or 0.0
+                rewards.append(reward)
                 total_reward += reward
+                steps_taken = decision_index + 1
+                
+                error_val = error if error else "null"
+                error_val = error_val.replace('\n', ' ')
+                done_val = str(done).lower()
+                
+                print(f"[STEP] step={steps_taken} action={action_str} reward={reward:.2f} done={done_val} error={error_val}", flush=True)
 
-                result_data = normalize_tool_result(extract_tool_result_from_observation(observation))
-                if result_data:
-                    latest_data = apply_tool_context("submit_model", {}, latest_data, result_data)
+                action_summaries.append(action_summary(tool_name, arguments, latest_data, reward))
 
-                metadata_grade = extract_observation_metadata(observation).get("grade", {})
-                result_grade = latest_data.get("grade", {}) if isinstance(latest_data, dict) else {}
-                if result_grade:
-                    final_score = result_grade.get("score")
-                    print(f"    Auto-submit Score: {final_score}")
-                elif metadata_grade:
-                    final_score = metadata_grade.get("score")
-                    print(f"    Auto-submit Score: {final_score}")
-            except Exception as exc:
-                print(f"  [Auto-submit failed: {exc}]")
+                if done:
+                    break
+            else:
+                # auto-submit
+                try:
+                    action_str = "submit_model({})"
+                    step_result = env.step(CallToolAction(tool_name="submit_model", arguments={}))
+                    observation = step_result.observation
+                    reward = step_result.reward or 0.0
+                    total_reward += reward
+                    done = step_result.done
+                    
+                    result_data = normalize_tool_result(extract_tool_result_from_observation(observation))
+                    if result_data:
+                        latest_data = apply_tool_context("submit_model", {}, latest_data, result_data)
 
-    task_stats.elapsed_seconds = round(time.time() - task_started_at, 1)
+                    metadata_grade = extract_observation_metadata(observation).get("grade", {})
+                    result_grade = latest_data.get("grade", {}) if isinstance(latest_data, dict) else {}
+                    if result_grade:
+                        final_score = result_grade.get("score") or 0.0
+                    elif metadata_grade:
+                        final_score = metadata_grade.get("score") or 0.0
+                        
+                    steps_taken += 1
+                    rewards.append(reward)
+                    print(f"[STEP] step={steps_taken} action={action_str} reward={reward:.2f} done={str(done).lower()} error=null", flush=True)
+
+                except Exception as exc:
+                    pass
+
+    except Exception as e:
+        print(f"[DEBUG] task container failed: {e}", flush=True)
+
+    finally:
+        task_stats.elapsed_seconds = round(time.time() - task_started_at, 1)
+        if final_score is None:
+            final_score = 0.0
+        final_score = min(max(float(final_score), 0.0), 1.0)
+        success = final_score >= 0.1
+        
+        rewards_str = ",".join(f"{float(r):.2f}" for r in rewards) if rewards else "0.00"
+        print(f"[END] success={str(success).lower()} steps={steps_taken} score={final_score:.3f} rewards={rewards_str}", flush=True)
 
     return {
         "task_id": task_id,
