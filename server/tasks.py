@@ -97,7 +97,7 @@ TASKS: Dict[str, TaskDefinition] = {
 }
 
 
-def _clamp(value: float, low: float = 0.0, high: float = 1.0) -> float:
+def _clamp(value: float, low: float = 0.0001, high: float = 0.9999) -> float:
     """Clamp a value to [low, high]."""
     return max(low, min(high, value))
 
