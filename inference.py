@@ -838,8 +838,8 @@ def run_task(client: OpenAI, scheduler: RequestScheduler, task_id: str) -> Dict[
     finally:
         task_stats.elapsed_seconds = round(time.time() - task_started_at, 1)
         if final_score is None:
-            final_score = 0.0
-        final_score = min(max(float(final_score), 0.0), 1.0)
+            final_score = 0.001
+        final_score = min(max(float(final_score), 0.001), 0.999)
         success = final_score >= 0.1
         
         rewards_str = ",".join(f"{float(r):.2f}" for r in rewards) if rewards else "0.00"
